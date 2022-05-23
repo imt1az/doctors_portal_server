@@ -2,7 +2,8 @@ const express = require("express");
 const app = express();
 const cors = require("cors");
 require("dotenv").config();
-const { MongoClient, ServerApiVersion } = require("mongodb");
+const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
+const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
 const port = process.env.PORT || 5000;
 const jwt = require("jsonwebtoken");
 
@@ -47,6 +48,7 @@ async function run() {
       .collection("bookings");
     const userCollection = client.db("doctors_portal").collection("users");
     const doctorCollection = client.db("doctors_portal").collection("doctors");
+    const paymentCollection = client.db("doctors_portal").collection("payments");
 
     //verify Admin
     const verifyAdmin = async (req, res, next) => {
@@ -127,7 +129,7 @@ async function run() {
         },
         process.env.ACCESS_TOKEN_SECRET,
         {
-          expiresIn: "1h",
+          expiresIn: "12h",
         }
       );
       res.send({
@@ -163,6 +165,14 @@ async function run() {
       res.send(services);
     });
 
+    //Get Booking For Payment
+    app.get('/booking/:id',verifyJWT,async(req,res)=>{
+      const id = req.params.id;
+      const query = {_id:ObjectId(id)}
+      const booking = await bookingCollection.findOne(query);
+      res.send(booking);
+    })
+
     //Get Booking
     app.get("/booking", verifyJWT, async (req, res) => {
       const patient = req.query.patient;
@@ -172,7 +182,7 @@ async function run() {
           patient: patient,
         };
         const bookings = await bookingCollection.find(query).toArray();
-        return res.send(bookings);
+        return res.send(bookings.reverse());
       } else {
         return res.status(403).send({
           message: "Forbidden Access",
@@ -224,6 +234,37 @@ async function run() {
       res.send(result);
     });
 
+  //  stripe Api
+  app.post('/create-payment-intent',verifyJWT, async(req,res)=>{
+      const service = req.body;
+      const price = service.price;
+      const amount = price * 100;
+      const paymentIntent = await stripe.paymentIntents.create({
+        amount:amount,
+        currency:'usd',
+        payment_method_types: ['card'],
+      })
+
+      res.send({clientSecret: paymentIntent.client_secret,
+      });
+
+  })
+
+  //Payment With stripe and Update
+  app.patch('/booking/:id',verifyJWT,async(req,res)=>{
+    const id = req.params.id;
+    const payment= req.body;
+    const filter = {_id:ObjectId(id)};
+    const updatedDoc = {
+      $set:{
+        paid:true,
+        transactionId : payment.transactionId
+      }
+    }
+    const result = await paymentCollection.insertOne(payment);
+    const updatedBooking = await bookingCollection.updateOne(filter,updatedDoc);
+    res.send(updatedDoc);
+  })
 
 
   } 
